@@ -1,0 +1,71 @@
+name: Deploy Pages and Screenshot
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare published folder
+        run: |
+          rm -rf public
+          mkdir public
+          # copy site files (exclude workflow folder)
+          shopt -s extglob || true
+          cp -r !( .github ) public 2>/dev/null || cp -r . public || true
+
+      - uses: actions/configure-pages@v3
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v1
+        with:
+          path: public
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v2
+
+  screenshot:
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install Playwright
+        run: |
+          npm init -y
+          npm i playwright
+          npx playwright install --with-deps
+
+      - name: Take screenshot of deployed site
+        env:
+          PAGES_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+        run: |
+          node -e "const { chromium } = require('playwright'); (async()=>{const b=await chromium.launch({args:['--no-sandbox']}); const p=await b.newPage(); await p.goto(process.env.PAGES_URL, {waitUntil:'networkidle'}); await p.screenshot({path:'screenshot.png', fullPage:true}); await b.close();})();"
+
+      - name: Commit screenshot and update README
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdir -p assets
+          mv screenshot.png assets/site-screenshot.png
+          echo -e "\n\n**Deployed site:** https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/" >> README.md
+          echo -e "\n\n![Site screenshot](assets/site-screenshot.png)" >> README.md
+          git add assets/site-screenshot.png README.md
+          git commit -m "Add Pages URL and screenshot [ci skip]" || echo "no changes to commit"
+          git push
